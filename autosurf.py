@@ -1,4 +1,4 @@
-# autosurf.py - Versione per Render (senza dotenv)
+# autosurf.py - Scarica dataset_speed.npz da Hugging Face
 
 import os
 import sys
@@ -9,7 +9,7 @@ import cv2
 import json
 from datetime import datetime
 from supabase import create_client
-from datasets import load_dataset
+from huggingface_hub import hf_hub_download
 import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -23,10 +23,12 @@ print("=" * 50, flush=True)
 supabase_url = os.environ.get("COOKIES_SUPABASE_URL")
 supabase_key = os.environ.get("COOKIES_SUPABASE_KEY")
 account_name = os.environ.get("ACCOUNT_NAME", "nicoladellaaziendavinicola")
+hf_token = os.environ.get("HF_TOKEN")  # Opzionale, per rate limit migliori
 
 print(f"COOKIES_SUPABASE_URL: {'✅' if supabase_url else '❌ MANCANTE'}", flush=True)
 print(f"COOKIES_SUPABASE_KEY: {'✅' if supabase_key else '❌ MANCANTE'}", flush=True)
 print(f"ACCOUNT_NAME: {account_name}", flush=True)
+print(f"HF_TOKEN: {'✅' if hf_token else '❌ NON SET (rate limit più basso)'}", flush=True)
 
 if not supabase_url or not supabase_key:
     print("❌ ERRORE: Variabili d'ambiente mancanti!", flush=True)
@@ -36,10 +38,13 @@ if not supabase_url or not supabase_key:
 DIM = 64
 REQUEST_TIMEOUT = 15
 ERRORI_DIR = "errori"
-DATASET_REPO = "zenadazurli/easyhits4u-dataset"
+DATASET_DIR = "dataset"
+DATASET_PATH = os.path.join(DATASET_DIR, "dataset_speed.npz")
+HF_REPO = "zenadazurli/easyhits4u-dataset"
+HF_FILENAME = "dataset_speed.npz"
 
 os.makedirs(ERRORI_DIR, exist_ok=True)
-os.makedirs("dataset", exist_ok=True)
+os.makedirs(DATASET_DIR, exist_ok=True)
 
 # ================ GLOBALS =====================
 X_fast = None
@@ -51,45 +56,64 @@ current_cookie_string = None
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
 
-# ================ CARICAMENTO DATASET =====================
-def load_dataset_from_hf():
-    global X_fast, y_fast, classes_fast
+# ================ DOWNLOAD DATASET DA HUGGING FACE =====================
+def download_dataset():
+    """Scarica dataset_speed.npz da Hugging Face"""
     
-    log(f"📥 Caricamento dataset da Hugging Face: {DATASET_REPO}")
+    # Se già esiste, verifica se è valido
+    if os.path.exists(DATASET_PATH):
+        log(f"✅ Dataset già presente in {DATASET_PATH}")
+        return True
+    
+    log(f"📥 Download dataset da Hugging Face: {HF_REPO}/{HF_FILENAME}")
     
     try:
-        dataset = load_dataset(DATASET_REPO, trust_remote_code=True)
-        
-        if "train" in dataset:
-            data = dataset["train"]
+        # Prova con token se fornito
+        if hf_token:
+            downloaded_path = hf_hub_download(
+                repo_id=HF_REPO,
+                filename=HF_FILENAME,
+                token=hf_token,
+                local_dir=DATASET_DIR,
+                local_dir_use_symlinks=False
+            )
         else:
-            data = dataset
+            # Senza token (rate limit più basso ma funziona)
+            downloaded_path = hf_hub_download(
+                repo_id=HF_REPO,
+                filename=HF_FILENAME,
+                local_dir=DATASET_DIR,
+                local_dir_use_symlinks=False
+            )
         
-        X = []
-        y = []
-        classes = []
-        class_to_idx = {}
+        log(f"✅ Dataset scaricato in {downloaded_path}")
+        return True
         
-        for item in data:
-            label = item.get("label", item.get("class", ""))
-            features = item.get("features", item.get("vector", []))
-            
-            if not label or not features:
-                continue
-            
-            if label not in class_to_idx:
-                class_to_idx[label] = len(classes)
-                classes.append(label)
-            
-            X.append(np.array(features, dtype=np.float32))
-            y.append(class_to_idx[label])
+    except Exception as e:
+        log(f"❌ Errore download dataset: {e}")
+        return False
+
+# ================ CARICAMENTO DATASET =====================
+def load_dataset():
+    global X_fast, y_fast, classes_fast
+    
+    if not os.path.exists(DATASET_PATH):
+        log(f"❌ Dataset non trovato: {DATASET_PATH}")
+        return False
+    
+    log(f"📥 Caricamento dataset da {DATASET_PATH}")
+    
+    try:
+        data = np.load(DATASET_PATH, allow_pickle=True)
+        X_fast = data["X"].astype(np.float32)
+        y_fast = data["y"].astype(np.int32)
         
-        if not X:
-            log("❌ Nessun dato valido trovato")
-            return False
+        if "classes" in data.files:
+            classes = list(np.array(data["classes"], dtype=object).tolist())
+        else:
+            unique = sorted(list(set(int(x) for x in y_fast.tolist())))
+            classes = [str(c) for c in unique]
         
-        X_fast = np.vstack(X).astype(np.float32)
-        y_fast = np.array(y, dtype=np.int32)
         classes_fast = {i: classes[i] for i in range(len(classes))}
         
         log(f"✅ Dataset caricato: {X_fast.shape[0]} vettori, {len(classes)} classi")
@@ -243,10 +267,17 @@ def main():
     log("🚀 EasyHits4U Autosurf")
     log("=" * 50)
     
-    if not load_dataset_from_hf():
-        log("❌ Impossibile proseguire senza dataset")
+    # Scarica dataset da Hugging Face
+    if not download_dataset():
+        log("❌ Impossibile scaricare il dataset")
         return
     
+    # Carica dataset
+    if not load_dataset():
+        log("❌ Impossibile caricare il dataset")
+        return
+    
+    # Ottieni cookie
     current_cookie_string = get_cookie_from_supabase()
     if not current_cookie_string:
         log("❌ Nessun cookie attivo trovato")
@@ -255,7 +286,7 @@ def main():
     log("✅ Cookie ottenuto")
     
     headers = {
-        "User-Agent": "Mozilla/5.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Cookie": current_cookie_string
     }
     session = requests.Session()
@@ -299,6 +330,7 @@ def main():
             
             crops = [crop_safe(img, p.get("coords", "")) for p in picmap]
             labels = [predict(c) for c in crops]
+            log(f"📋 Labels: {labels}")
             
             seen = {}
             chosen_idx = None
@@ -336,7 +368,7 @@ def main():
             
             captcha_counter += 1
             errori_consecutivi = 0
-            log(f"✅ OK #{captcha_counter}")
+            log(f"✅ OK #{captcha_counter} - indice {chosen_idx}")
             
             time.sleep(2)
             
