@@ -1,4 +1,4 @@
-# autosurf.py - Versione definitiva con dataset da Hugging Face (NO file NPZ)
+# autosurf.py - Versione definitiva con dataset da Hugging Face
 
 import os
 import sys
@@ -14,12 +14,10 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# ================ DEBUG AVVIO =====================
 print("=" * 50, flush=True)
 print("🚀 AVVIO AUTOSURF", flush=True)
 print("=" * 50, flush=True)
 
-# Verifica variabili d'ambiente
 supabase_url = os.environ.get("COOKIES_SUPABASE_URL")
 supabase_key = os.environ.get("COOKIES_SUPABASE_KEY")
 account_name = os.environ.get("ACCOUNT_NAME", "nicoladellaaziendavinicola")
@@ -32,7 +30,6 @@ if not supabase_url or not supabase_key:
     print("❌ ERRORE: Variabili d'ambiente mancanti!", flush=True)
     sys.exit(1)
 
-# ================ CONFIG =====================
 DIM = 64
 REQUEST_TIMEOUT = 15
 ERRORI_DIR = "errori"
@@ -40,25 +37,20 @@ DATASET_REPO = "zenadazurli/easyhits4u-dataset"
 
 os.makedirs(ERRORI_DIR, exist_ok=True)
 
-# ================ GLOBALS =====================
 X_fast = None
 y_fast = None
 classes_fast = None
 current_cookie_string = None
 
-# ================ LOG =====================
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
 
-# ================ CARICAMENTO DATASET DA HUGGING FACE =====================
 def load_dataset_from_hf():
-    """Carica il dataset direttamente da Hugging Face e costruisce i vettori FAISS"""
     global X_fast, y_fast, classes_fast
     
     log(f"📥 Caricamento dataset da Hugging Face: {DATASET_REPO}")
     
     try:
-        # Carica il dataset (pubblico, senza token)
         dataset = load_dataset(DATASET_REPO, trust_remote_code=True)
         
         if "train" in dataset:
@@ -66,10 +58,8 @@ def load_dataset_from_hf():
         else:
             data = dataset
         
-        # Costruisce i vettori e le etichette
         X = []
         y = []
-        class_names = []
         class_to_idx = {}
         
         for item in data:
@@ -79,10 +69,8 @@ def load_dataset_from_hf():
             if features is None or label_idx is None:
                 continue
             
-            # Ottieni il nome della classe
             if hasattr(data.features['y'], 'names'):
-                class_names = data.features['y'].names
-                class_name = class_names[label_idx]
+                class_name = data.features['y'].names[label_idx]
             else:
                 class_name = str(label_idx)
             
@@ -101,19 +89,17 @@ def load_dataset_from_hf():
         classes_fast = {v: k for k, v in class_to_idx.items()}
         
         log(f"✅ Dataset caricato: {X_fast.shape[0]} vettori, {len(classes_fast)} classi")
-        log(f"   Classi: {list(classes_fast.values())[:5]}...")
         return True
         
     except Exception as e:
         log(f"❌ Errore caricamento dataset: {e}")
         return False
 
-# ================ SUPABASE FUNCTIONS =====================
 def get_cookie_from_supabase():
     try:
         supabase = create_client(supabase_url, supabase_key)
         resp = supabase.table('account_cookies')\
-            .select('cookies_string', 'user_id', 'sesids')\  # <--- CORRETTO: sesids
+            .select('cookies_string', 'user_id', 'sesids')\
             .eq('account_name', account_name)\
             .eq('status', 'active')\
             .execute()
@@ -134,7 +120,6 @@ def refresh_cookie():
             return cookie
     return None
 
-# ================ FUNZIONI DI RICONOSCIMENTO =====================
 def centra_figura(image):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     _, thresh = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY_INV)
@@ -215,7 +200,6 @@ def crop_safe(img, coords):
         return None
     return img[y1:y2, x1:x2]
 
-# ================ SALVATAGGIO ERRORI =====================
 def salva_errore(qpic, img, picmap, labels, chosen_idx, motivo, urlid=None):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     folder = os.path.join(ERRORI_DIR, f"{timestamp}_{qpic}")
@@ -244,7 +228,6 @@ def salva_errore(qpic, img, picmap, labels, chosen_idx, motivo, urlid=None):
     
     log(f"📁 Errore salvato in {folder}")
 
-# ================ MAIN LOOP =====================
 def main():
     global current_cookie_string
     
@@ -252,12 +235,10 @@ def main():
     log("🚀 EasyHits4U Autosurf")
     log("=" * 50)
     
-    # Carica dataset da Hugging Face
     if not load_dataset_from_hf():
         log("❌ Impossibile proseguire senza dataset")
         return
     
-    # Ottieni cookie
     current_cookie_string = get_cookie_from_supabase()
     if not current_cookie_string:
         log("❌ Nessun cookie attivo trovato")
