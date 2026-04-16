@@ -79,8 +79,7 @@ def load_dataset_from_hf():
             if features is None or label_idx is None:
                 continue
             
-            # Ottieni il nome della classe (16 classi: bersaglio, calamita, ...)
-            # Il dataset ha ClassLabel con i nomi
+            # Ottieni il nome della classe
             if hasattr(data.features['y'], 'names'):
                 class_names = data.features['y'].names
                 class_name = class_names[label_idx]
@@ -114,7 +113,7 @@ def get_cookie_from_supabase():
     try:
         supabase = create_client(supabase_url, supabase_key)
         resp = supabase.table('account_cookies')\
-            .select('cookies_string', 'user_id', 'sesid')\
+            .select('cookies_string', 'user_id', 'sesids')\  # <--- CORRETTO: sesids
             .eq('account_name', account_name)\
             .eq('status', 'active')\
             .execute()
@@ -135,7 +134,7 @@ def refresh_cookie():
             return cookie
     return None
 
-# ================ FUNZIONI DI RICONOSCIMENTO (IDENTICHE A divellaeasy) =====================
+# ================ FUNZIONI DI RICONOSCIMENTO =====================
 def centra_figura(image):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     _, thresh = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY_INV)
