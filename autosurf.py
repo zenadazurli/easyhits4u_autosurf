@@ -1,4 +1,4 @@
-# autosurf.py - Scarica dataset_speed.npz da Hugging Face
+# autosurf.py - Versione definitiva con dataset da Hugging Face (NO file NPZ)
 
 import os
 import sys
@@ -9,7 +9,7 @@ import cv2
 import json
 from datetime import datetime
 from supabase import create_client
-from huggingface_hub import hf_hub_download
+from datasets import load_dataset
 import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -23,12 +23,10 @@ print("=" * 50, flush=True)
 supabase_url = os.environ.get("COOKIES_SUPABASE_URL")
 supabase_key = os.environ.get("COOKIES_SUPABASE_KEY")
 account_name = os.environ.get("ACCOUNT_NAME", "nicoladellaaziendavinicola")
-hf_token = os.environ.get("HF_TOKEN")  # Opzionale, per rate limit migliori
 
 print(f"COOKIES_SUPABASE_URL: {'✅' if supabase_url else '❌ MANCANTE'}", flush=True)
 print(f"COOKIES_SUPABASE_KEY: {'✅' if supabase_key else '❌ MANCANTE'}", flush=True)
 print(f"ACCOUNT_NAME: {account_name}", flush=True)
-print(f"HF_TOKEN: {'✅' if hf_token else '❌ NON SET (rate limit più basso)'}", flush=True)
 
 if not supabase_url or not supabase_key:
     print("❌ ERRORE: Variabili d'ambiente mancanti!", flush=True)
@@ -38,13 +36,9 @@ if not supabase_url or not supabase_key:
 DIM = 64
 REQUEST_TIMEOUT = 15
 ERRORI_DIR = "errori"
-DATASET_DIR = "dataset"
-DATASET_PATH = os.path.join(DATASET_DIR, "dataset_speed.npz")
-HF_REPO = "zenadazurli/easyhits4u-dataset"
-HF_FILENAME = "dataset_speed.npz"
+DATASET_REPO = "zenadazurli/easyhits4u-dataset"
 
 os.makedirs(ERRORI_DIR, exist_ok=True)
-os.makedirs(DATASET_DIR, exist_ok=True)
 
 # ================ GLOBALS =====================
 X_fast = None
@@ -56,67 +50,59 @@ current_cookie_string = None
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
 
-# ================ DOWNLOAD DATASET DA HUGGING FACE =====================
-def download_dataset():
-    """Scarica dataset_speed.npz da Hugging Face"""
-    
-    # Se già esiste, verifica se è valido
-    if os.path.exists(DATASET_PATH):
-        log(f"✅ Dataset già presente in {DATASET_PATH}")
-        return True
-    
-    log(f"📥 Download dataset da Hugging Face: {HF_REPO}/{HF_FILENAME}")
-    
-    try:
-        # Prova con token se fornito
-        if hf_token:
-            downloaded_path = hf_hub_download(
-                repo_id=HF_REPO,
-                filename=HF_FILENAME,
-                token=hf_token,
-                local_dir=DATASET_DIR,
-                local_dir_use_symlinks=False
-            )
-        else:
-            # Senza token (rate limit più basso ma funziona)
-            downloaded_path = hf_hub_download(
-                repo_id=HF_REPO,
-                filename=HF_FILENAME,
-                local_dir=DATASET_DIR,
-                local_dir_use_symlinks=False
-            )
-        
-        log(f"✅ Dataset scaricato in {downloaded_path}")
-        return True
-        
-    except Exception as e:
-        log(f"❌ Errore download dataset: {e}")
-        return False
-
-# ================ CARICAMENTO DATASET =====================
-def load_dataset():
+# ================ CARICAMENTO DATASET DA HUGGING FACE =====================
+def load_dataset_from_hf():
+    """Carica il dataset direttamente da Hugging Face e costruisce i vettori FAISS"""
     global X_fast, y_fast, classes_fast
     
-    if not os.path.exists(DATASET_PATH):
-        log(f"❌ Dataset non trovato: {DATASET_PATH}")
-        return False
-    
-    log(f"📥 Caricamento dataset da {DATASET_PATH}")
+    log(f"📥 Caricamento dataset da Hugging Face: {DATASET_REPO}")
     
     try:
-        data = np.load(DATASET_PATH, allow_pickle=True)
-        X_fast = data["X"].astype(np.float32)
-        y_fast = data["y"].astype(np.int32)
+        # Carica il dataset (pubblico, senza token)
+        dataset = load_dataset(DATASET_REPO, trust_remote_code=True)
         
-        if "classes" in data.files:
-            classes = list(np.array(data["classes"], dtype=object).tolist())
+        if "train" in dataset:
+            data = dataset["train"]
         else:
-            unique = sorted(list(set(int(x) for x in y_fast.tolist())))
-            classes = [str(c) for c in unique]
+            data = dataset
         
-        classes_fast = {i: classes[i] for i in range(len(classes))}
+        # Costruisce i vettori e le etichette
+        X = []
+        y = []
+        class_names = []
+        class_to_idx = {}
         
-        log(f"✅ Dataset caricato: {X_fast.shape[0]} vettori, {len(classes)} classi")
+        for item in data:
+            features = item.get("X")
+            label_idx = item.get("y")
+            
+            if features is None or label_idx is None:
+                continue
+            
+            # Ottieni il nome della classe (16 classi: bersaglio, calamita, ...)
+            # Il dataset ha ClassLabel con i nomi
+            if hasattr(data.features['y'], 'names'):
+                class_names = data.features['y'].names
+                class_name = class_names[label_idx]
+            else:
+                class_name = str(label_idx)
+            
+            if class_name not in class_to_idx:
+                class_to_idx[class_name] = len(class_to_idx)
+            
+            X.append(np.array(features, dtype=np.float32))
+            y.append(class_to_idx[class_name])
+        
+        if not X:
+            log("❌ Nessun dato valido trovato nel dataset")
+            return False
+        
+        X_fast = np.vstack(X).astype(np.float32)
+        y_fast = np.array(y, dtype=np.int32)
+        classes_fast = {v: k for k, v in class_to_idx.items()}
+        
+        log(f"✅ Dataset caricato: {X_fast.shape[0]} vettori, {len(classes_fast)} classi")
+        log(f"   Classi: {list(classes_fast.values())[:5]}...")
         return True
         
     except Exception as e:
@@ -149,7 +135,7 @@ def refresh_cookie():
             return cookie
     return None
 
-# ================ FUNZIONI DI RICONOSCIMENTO =====================
+# ================ FUNZIONI DI RICONOSCIMENTO (IDENTICHE A divellaeasy) =====================
 def centra_figura(image):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     _, thresh = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY_INV)
@@ -267,14 +253,9 @@ def main():
     log("🚀 EasyHits4U Autosurf")
     log("=" * 50)
     
-    # Scarica dataset da Hugging Face
-    if not download_dataset():
-        log("❌ Impossibile scaricare il dataset")
-        return
-    
-    # Carica dataset
-    if not load_dataset():
-        log("❌ Impossibile caricare il dataset")
+    # Carica dataset da Hugging Face
+    if not load_dataset_from_hf():
+        log("❌ Impossibile proseguire senza dataset")
         return
     
     # Ottieni cookie
