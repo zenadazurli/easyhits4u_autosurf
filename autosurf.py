@@ -284,7 +284,7 @@ def main():
             
             if not urlid or not qpic or not picmap:
                 log("⚠️ Cookie scaduto")
-                errori_consecutivi += 1  # <--- CORRETTO!
+                errori_consecutivi += 1
                 new_cookie = refresh_cookie()
                 if new_cookie:
                     current_cookie_string = new_cookie
