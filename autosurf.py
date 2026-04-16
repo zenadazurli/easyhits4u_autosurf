@@ -284,13 +284,15 @@ def main():
             
             if not urlid or not qpic or not picmap:
                 log("⚠️ Cookie scaduto")
-                errori_consecutivos + =1
+                errori_consecutivi += 1  # <--- CORRETTO!
                 new_cookie = refresh_cookie()
                 if new_cookie:
                     current_cookie_string = new_cookie
                     session.headers.update({"Cookie": current_cookie_string})
                     errori_consecutivi = 0
                 continue
+            
+            errori_consecutivi = 0
             
             img_data = session.get(f"https://www.easyhits4u.com/simg/{qpic}.jpg", verify=False).content
             img = cv2.imdecode(np.frombuffer(img_data, np.uint8), cv2.IMREAD_COLOR)
