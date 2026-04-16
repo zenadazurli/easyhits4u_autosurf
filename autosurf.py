@@ -98,10 +98,10 @@ def load_dataset_from_hf():
 def get_cookie_from_supabase():
     try:
         supabase = create_client(supabase_url, supabase_key)
-        resp = supabase.table('account_cookies')\
-            .select('cookies_string', 'user_id', 'sesids')\
-            .eq('account_name', account_name)\
-            .eq('status', 'active')\
+        resp = supabase.table('account_cookies')
+            .select('cookies_string', 'user_id', 'sesids')
+            .eq('account_name', account_name)
+            .eq('status', 'active')
             .execute()
         
         if resp.data:
